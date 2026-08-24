@@ -4,7 +4,8 @@ Colony counts → CFU/mL, in a single self-contained HTML file.
 
 **Live:** https://mbaffour.github.io/cfu-calculator/
 
-- Name your samples and log replicates — colony count, dilution (any factor, any step), and volume plated per row. New replicates inherit the previous row's dilution and volume.
+- **Quick table** (the default): one row per sample — name, colonies, dilution (any factor, any step), volume plated, CFU/mL. `Enter` in a colonies box adds the next row and focuses it, so a plating series types straight down the column. New rows inherit the previous row's dilution and volume.
+- **Replicates & stats** is one chip away, for several plates per sample. A sample with multiple replicates shows its mean in the quick table with its inputs locked, so the two views can never disagree about the same data.
 - Per-sample **mean ± SD and CV%** across countable replicates.
 - Counts outside the countable window (30–300 per plate, 3–30 per spot) are flagged; mark a plate **TNTC** or **Excl** to drop it from the stats.
 - All-zero samples report a **detection limit** (`< 1 colony at the least-diluted plate`) instead of a bogus mean.
