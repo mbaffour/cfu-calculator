@@ -56,6 +56,11 @@ input[type=date]{font-family:var(--mono)}
 table{border-collapse:collapse;width:100%;font-size:.85rem}
 th{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);
   text-align:left;padding:5px 10px;border-bottom:1px solid var(--border)}
+/* Units must NEVER be uppercased. text-transform maps the micro sign µ to Greek
+   capital Mu, which renders identically to M — so "Vol (µL)" displays as
+   "VOL (ML)" and a 100 µL plating volume reads as 100 mL, a 1000x error in a
+   tool people dose from. Wrap every unit in a label or header with .u */
+th .u,.f label .u{text-transform:none}
 td{padding:5px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
 tr:last-child td{border-bottom:none}
 td.num,th.num{text-align:right}
@@ -97,7 +102,7 @@ footer a{color:var(--accent)}
   <div id="samples"></div>
   <button class="btn ac" onclick="APP.addSample()">＋ Add sample</button>
 
-  <div class="sl">Summary</div>
+  <div class="sl" id="summaryLabel">Summary</div>
   <div class="summary tblwrap" id="summary"></div>
 
   <div class="exports">
@@ -263,14 +268,19 @@ function defRep(k,volUl){ return {id:_id('r'), colonies:null, k:(k==null?5:k), v
 function defSample(n){ return {id:_id('s'), name:'Sample '+n, reps:[defRep(5,S?S.defVolUl:100)]}; }
 function defState(){
   _seq=1;
-  return {v:1, name:'', date:today(), mode:'plate', factor:10, defVolUl:100,
+  return {v:1, view:'quick', name:'', date:today(), mode:'plate', factor:10, defVolUl:100,
           samples:[{id:_id('s'), name:'Sample 1', reps:[defRep(5,100)]}]};
 }
 let S=null;
 function load(){
   try{
     const raw=localStorage.getItem(LS_KEY);
-    if(raw){ const st=JSON.parse(raw); if(st&&st.v===1&&Array.isArray(st.samples)){ _seq=st.seq||1000; return st; } }
+    if(raw){ const st=JSON.parse(raw); if(st&&st.v===1&&Array.isArray(st.samples)){ _seq=st.seq||1000;
+      // Saved before the quick view existed: single-rep data reads naturally
+      // as a quick table, multi-rep data belongs in the replicates view.
+      if(st.view!=='quick'&&st.view!=='full')
+        st.view=st.samples.some(s=>s.reps&&s.reps.length>1)?'full':'quick';
+      return st; } }
   }catch(e){}
   return defState();
 }
@@ -321,11 +331,62 @@ function renderSettings(){
         <button class="chip ${S.mode==='plate'?'on':''}" onclick="APP.set('mode','plate')">Plate 30–300</button>
         <button class="chip ${S.mode==='spot'?'on':''}" onclick="APP.set('mode','spot')">Spot 3–30</button>
       </div></div>
-    <div class="f"><label>Default vol (µL)</label>
+    <div class="f"><label>Entry mode</label>
+      <div class="chips">
+        <button class="chip ${S.view==='quick'?'on':''}" onclick="APP.set('view','quick')">Quick table</button>
+        <button class="chip ${S.view!=='quick'?'on':''}" onclick="APP.set('view','full')">Replicates</button>
+      </div></div>
+    <div class="f"><label>Default vol <span class="u">(µL)</span></label>
       <input type="number" min="1" step="1" value="${S.defVolUl}"
         onchange="APP.set('defVolUl',Math.max(1,+this.value||100))"></div>`;
 }
+// Quick view: one row per sample — name, colonies, dilution, volume, CFU/mL.
+// Rows edit the sample's FIRST replicate; a sample carrying more replicates
+// shows its mean here and is edited in the Replicates view.
+function renderQuick(){
+  const el=document.getElementById('samples');
+  if(!S.samples.length){ el.innerHTML='<div class="empty">No samples yet — add one below.</div>'; return; }
+  const rows=S.samples.map(s=>{
+    const r=s.reps[0];
+    const multi=s.reps.length>1;
+    const c=multi?sampleCalc(s):null;
+    let cfuTxt='—', fl=r?repFlag(r):{cls:'',txt:''};
+    if(multi){
+      cfuTxt=c.st.n?sci(c.st.mean)+' <span class="dil">(mean of '+c.st.n+')</span>'
+            :(c.allZero?'&lt; '+sci(c.limit):'—');
+      fl={cls:'',txt:''};
+    }else if(r){
+      const cfu=(r.tntc||r.excl||r.colonies==null)?NaN:cfuOf(r.colonies,r.k,S.factor,r.volUl);
+      if(isFinite(cfu)&&cfu>0)cfuTxt=sci(cfu);
+      else if(r.colonies===0&&!r.tntc&&!r.excl)cfuTxt='&lt; '+sci(cfuOf(1,r.k,S.factor,r.volUl));
+    }
+    const moreNote=multi?` <span class="dil" style="cursor:pointer" title="Edit the ${s.reps.length} replicates in the Replicates view" onclick="APP.set('view','full')">+${s.reps.length-1} reps</span>`:'';
+    const dis=multi?' disabled title="This sample has replicates — edit them in the Replicates view"':'';
+    return `<tr>
+      <td><input type="text" value="${esc(s.name)}" style="min-width:130px;width:100%" onchange="APP.sampleName('${s.id}',this.value)">${moreNote}</td>
+      <td><input type="number" min="0" step="1" placeholder="—" id="qc-${s.id}" value="${r&&r.colonies!=null?r.colonies:''}"${dis}
+        onchange="APP.q('${s.id}','colonies',this.value)"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();APP.qAdd();}"></td>
+      <td><input type="number" min="0" step="1" value="${r?r.k:5}" style="width:4em"${dis}
+        onchange="APP.q('${s.id}','k',this.value)">
+        <span class="dil">${dilLabel(r?r.k:5,S.factor)}</span></td>
+      <td><input type="number" min="1" step="1" value="${r?r.volUl:S.defVolUl}"${dis}
+        onchange="APP.q('${s.id}','volUl',this.value)"></td>
+      <td class="num cfu">${cfuTxt}</td>
+      <td>${fl.txt?`<span class="flag ${fl.cls}">${fl.txt}</span>`:''}</td>
+      <td><button class="btn sm dn" title="Delete sample" onclick="APP.delSample('${s.id}')">✕</button></td>
+    </tr>`;
+  }).join('');
+  el.innerHTML=`<div class="sample"><div class="tblwrap"><table>
+    <tr><th>Sample</th><th>Colonies</th><th>Dilution 10^-k</th><th>Vol <span class="u">(µL)</span></th>
+        <th class="num"><span class="u">CFU/mL</span></th><th>Flag</th><th></th></tr>
+    ${rows}
+  </table></div>
+  <p class="hint" style="margin-top:8px">Enter in a colonies box adds the next row. Zero colonies reports the
+    detection limit; switch to <b>Replicates</b> for multiple plates per sample and mean ± SD.</p></div>`;
+}
 function renderSamples(){
+  if(S.view==='quick'){ renderQuick(); return; }
   const el=document.getElementById('samples');
   if(!S.samples.length){ el.innerHTML='<div class="empty">No samples yet — add one below.</div>'; return; }
   el.innerHTML=S.samples.map(s=>{
@@ -362,8 +423,8 @@ function renderSamples(){
         <button class="btn sm dn" onclick="APP.delSample('${s.id}')">Delete sample</button>
       </div>
       <div class="tblwrap"><table>
-        <tr><th class="num">Rep</th><th>Colonies</th><th>Dilution 10^-k</th><th>Vol (µL)</th>
-            <th>TNTC</th><th>Excl</th><th class="num">CFU/mL</th><th>Flag</th><th></th></tr>
+        <tr><th class="num">Rep</th><th>Colonies</th><th>Dilution 10^-k</th><th>Vol <span class="u">(µL)</span></th>
+            <th>TNTC</th><th>Excl</th><th class="num"><span class="u">CFU/mL</span></th><th>Flag</th><th></th></tr>
         ${rows}
       </table></div>
     </div>`;
@@ -371,6 +432,12 @@ function renderSamples(){
 }
 function renderSummary(){
   const el=document.getElementById('summary');
+  // The quick table already shows one CFU value per row — a per-sample
+  // summary would repeat it. Stats live in the Replicates view.
+  const quick=S.view==='quick';
+  document.getElementById('summaryLabel').style.display=quick?'none':'';
+  el.style.display=quick?'none':'';
+  if(quick)return;
   const body=S.samples.map(s=>{
     const c=sampleCalc(s);
     const notes=[];
@@ -430,7 +497,15 @@ function toast(msg){
 // ── public handlers ───────────────────────────────────────────────────
 window.APP={
   set(k,v){ S[k]=v; render(); },
-  addSample(){ S.samples.push(defSample(S.samples.length+1)); render(); },
+  addSample(){
+    // New samples inherit the previous sample's dilution and volume — in a
+    // plating session those rarely change row to row.
+    const prev=S.samples[S.samples.length-1];
+    const pr=prev&&prev.reps[prev.reps.length-1];
+    const s={id:_id('s'), name:'Sample '+(S.samples.length+1),
+             reps:[defRep(pr?pr.k:5, pr?pr.volUl:S.defVolUl)]};
+    S.samples.push(s); render(); return s;
+  },
   delSample(id){ S.samples=S.samples.filter(s=>s.id!==id); render(); },
   sampleName(id,v){ const s=sampleById(id); if(s){ s.name=v||s.name; render(); } },
   addRep(id){
@@ -439,6 +514,19 @@ window.APP={
     s.reps.push(defRep(last?last.k:5,last?last.volUl:S.defVolUl)); render();
   },
   delRep(sid,rid){ const s=sampleById(sid); if(s){ s.reps=s.reps.filter(r=>r.id!==rid); render(); } },
+  // Quick-table edits target the sample's first replicate (created if missing).
+  q(sid,key,v){
+    const s=sampleById(sid); if(!s)return;
+    if(!s.reps.length)s.reps.push(defRep(5,S.defVolUl));
+    APP.rep(sid,s.reps[0].id,key,v);
+  },
+  // Enter in a quick-table colonies box: add the next row and put the cursor
+  // in its colonies input, so a plate series types straight down the column.
+  qAdd(){
+    const s=APP.addSample();
+    const inp=document.getElementById('qc-'+s.id);
+    if(inp)inp.focus();
+  },
   rep(sid,rid,k,v){
     const s=sampleById(sid); if(!s)return;
     const r=repById(s,rid); if(!r)return;
