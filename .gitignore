@@ -1,0 +1,6 @@
+# Local dev servers used to preview index.html over http:// instead of
+# file://. Machine-specific, not part of the tool.
+serve.js
+
+# Claude Code per-project settings and local session state.
+.claude/
